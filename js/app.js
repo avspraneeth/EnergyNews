@@ -36,8 +36,9 @@ function loadState() {
 
   if (!state.sources.length) {
     state.sources = [
-      { id: uid(), label: 'Utility Dive',  url: 'https://www.utilitydive.com/feeds/news/' },
-      { id: uid(), label: 'CleanTechnica', url: 'https://cleantechnica.com/feed/' }
+      { id: uid(), label: 'Utility Dive',        url: 'https://www.utilitydive.com/feeds/news/' },
+      { id: uid(), label: 'CleanTechnica',        url: 'https://cleantechnica.com/feed/' },
+      { id: uid(), label: 'LBL Energy Research',  url: 'https://emp.lbl.gov/news' }
     ];
   }
   if (!state.subjects.length) {
@@ -323,7 +324,7 @@ function closeModal(id) { document.getElementById(id).style.display = 'none'; }
    ═══════════════════════════════════════════════════════ */
 async function refresh() {
   if (!state.sources.length) {
-    toast('Add at least one RSS feed URL in the Inputs tab.', 'error');
+    toast('Add at least one source URL in the Inputs tab.', 'error');
     switchMainTab('inputs');
     return;
   }
@@ -352,7 +353,7 @@ async function refresh() {
     }
 
     if (!discovered.length) {
-      toast('No articles found. Make sure your sources are RSS/Atom feed URLs.', 'error');
+      toast('No articles found. Check that your source URLs are accessible.', 'error');
       hideProgress();
       btn.classList.remove('loading');
       btn.disabled = false;
@@ -408,50 +409,132 @@ async function refresh() {
 }
 
 /* ──────────────────────────────────────────────────────
-   RSS Fetching & Parsing
+   Fetch & Parse — tries RSS/Atom first, falls back to
+   HTML scraping for sites without a feed
    ────────────────────────────────────────────────────── */
 async function fetchAndParseRSS(source) {
+  const label    = source.label || extractDomain(source.url);
   const proxyUrl = CORS_PROXY + encodeURIComponent(source.url);
-  const res = await fetch(proxyUrl);
+  const res      = await fetch(proxyUrl);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const text = await res.text();
-  return parseRSSXML(text, source.label || extractDomain(source.url));
+
+  // Try RSS/Atom first
+  const rssItems = tryParseRSS(text, label);
+  if (rssItems.length > 0) return rssItems;
+
+  // Fall back to HTML scraping
+  return scrapeHTML(text, label, source.url);
 }
 
-function parseRSSXML(xmlText, sourceLabel) {
+function tryParseRSS(text, sourceLabel) {
+  try {
+    const parser = new DOMParser();
+    const doc    = parser.parseFromString(text, 'text/xml');
+    const isAtom = !!doc.querySelector('feed');
+    const items  = Array.from(doc.querySelectorAll(isAtom ? 'entry' : 'item'));
+    if (!items.length) return [];
+
+    return items.map(item => {
+      let url, title, dateRaw, descRaw;
+      if (isAtom) {
+        url     = item.querySelector('link')?.getAttribute('href')
+               || item.querySelector('link')?.textContent?.trim() || '';
+        title   = item.querySelector('title')?.textContent?.trim() || '';
+        dateRaw = item.querySelector('updated, published')?.textContent || null;
+        descRaw = item.querySelector('summary, content')?.textContent || '';
+      } else {
+        url     = item.querySelector('link')?.textContent?.trim() || '';
+        title   = item.querySelector('title')?.textContent?.trim() || '';
+        dateRaw = item.querySelector('pubDate')?.textContent || null;
+        descRaw = item.querySelector('description')?.textContent || '';
+      }
+      return {
+        id:       uid(),
+        url:      url.trim(),
+        title:    title,
+        date:     parseRSSDate(dateRaw),
+        summary:  stripHtml(descRaw).slice(0, 220).trim(),
+        source:   sourceLabel,
+        type:     detectArticleType(title),
+        subjects: []
+      };
+    }).filter(a => a.url && a.title);
+  } catch { return []; }
+}
+
+/* ──────────────────────────────────────────────────────
+   HTML scraper — extracts article links from pages that
+   don't publish an RSS/Atom feed
+   ────────────────────────────────────────────────────── */
+function scrapeHTML(htmlText, sourceLabel, baseUrl) {
   const parser = new DOMParser();
-  const doc    = parser.parseFromString(xmlText, 'text/xml');
+  const doc    = parser.parseFromString(htmlText, 'text/html');
 
-  const isAtom = !!doc.querySelector('feed');
-  const items  = Array.from(doc.querySelectorAll(isAtom ? 'entry' : 'item'));
+  // Remove navigation chrome to reduce noise
+  doc.querySelectorAll('nav, header, footer, aside, .sidebar, .menu, .navigation, .breadcrumb').forEach(el => el.remove());
 
-  return items.map(item => {
-    let url, title, dateRaw, descRaw;
-    if (isAtom) {
-      url     = item.querySelector('link')?.getAttribute('href')
-             || item.querySelector('link')?.textContent?.trim()
-             || '';
-      title   = item.querySelector('title')?.textContent?.trim() || '';
-      dateRaw = item.querySelector('updated, published')?.textContent || null;
-      descRaw = item.querySelector('summary, content')?.textContent || '';
-    } else {
-      url     = item.querySelector('link')?.textContent?.trim() || '';
-      title   = item.querySelector('title')?.textContent?.trim() || '';
-      dateRaw = item.querySelector('pubDate')?.textContent || null;
-      descRaw = item.querySelector('description')?.textContent || '';
+  const seen     = new Set();
+  const articles = [];
+
+  function addArticle(url, title, container) {
+    if (!url || !title || title.length < 10 || seen.has(url)) return;
+    if (!isLikelyArticleUrl(url, baseUrl)) return;
+    seen.add(url);
+    const dateEl  = container?.querySelector('time, [datetime], .date, .pub-date, .published, .entry-date');
+    const dateStr = dateEl?.getAttribute('datetime') || dateEl?.textContent;
+    const paraEl  = container?.querySelector('p');
+    const summary = paraEl ? stripHtml(paraEl.textContent).slice(0, 220).trim() : '';
+    articles.push({ id: uid(), url, title: title.trim(), date: parseRSSDate(dateStr), summary, source: sourceLabel, type: detectArticleType(title), subjects: [] });
+  }
+
+  // Strategy 1: explicit <article> elements
+  doc.querySelectorAll('article').forEach(el => {
+    const link    = el.querySelector('h1 a, h2 a, h3 a, h4 a, a[href]');
+    const heading = el.querySelector('h1, h2, h3, h4');
+    if (link && heading) {
+      addArticle(resolveUrl(link.getAttribute('href'), baseUrl), heading.textContent, el);
     }
+  });
 
-    return {
-      id:       uid(),
-      url:      url.trim(),
-      title:    title,
-      date:     parseRSSDate(dateRaw),
-      summary:  stripHtml(descRaw).slice(0, 220).trim(),
-      source:   sourceLabel,
-      type:     detectArticleType(title),
-      subjects: []
-    };
-  }).filter(a => a.url && a.title);
+  // Strategy 2: headings that contain or are followed by a link
+  if (articles.length < 5) {
+    doc.querySelectorAll('h2 a[href], h3 a[href]').forEach(link => {
+      const container = link.closest('li, div, section, article') || link.parentElement?.parentElement;
+      addArticle(resolveUrl(link.getAttribute('href'), baseUrl), link.textContent, container);
+    });
+  }
+
+  // Strategy 3: any same-domain links with descriptive text as a last resort
+  if (articles.length < 3) {
+    doc.querySelectorAll('a[href]').forEach(link => {
+      const title = link.getAttribute('title') || link.textContent;
+      if (title && title.trim().length > 25) {
+        addArticle(resolveUrl(link.getAttribute('href'), baseUrl), title, link.closest('li, div'));
+      }
+    });
+  }
+
+  return articles;
+}
+
+function resolveUrl(href, base) {
+  if (!href) return null;
+  try { return new URL(href, base).href; } catch { return null; }
+}
+
+function isLikelyArticleUrl(url, base) {
+  try {
+    const u = new URL(url);
+    const b = new URL(base);
+    // Must be same hostname or a subdomain of it
+    if (u.hostname !== b.hostname && !u.hostname.endsWith('.' + b.hostname)) return false;
+    // Must have a path beyond the root
+    if (u.pathname === '/' || u.pathname === '') return false;
+    // Skip common non-article paths
+    if (/\/(tag|tags|category|categories|author|page|search|feed|rss|about|contact|privacy|terms|login|register)\b/i.test(u.pathname)) return false;
+    return true;
+  } catch { return false; }
 }
 
 /* ──────────────────────────────────────────────────────
