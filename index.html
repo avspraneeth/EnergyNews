@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Energy News Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="app-shell">
+
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="logo-mark"></div>
+        <div>
+          <h1 class="app-title">Energy Intelligence</h1>
+          <p class="app-subtitle">News · Research · Policy · Rulings</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <span class="last-refresh" id="lastRefresh">Never refreshed</span>
+        <button class="btn-refresh" id="refreshBtn" onclick="app.refresh()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+          Refresh
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Nav Tabs -->
+    <nav class="main-nav">
+      <button class="nav-tab active" onclick="app.switchMainTab('dashboard')" id="tab-dashboard">Dashboard</button>
+      <button class="nav-tab" onclick="app.switchMainTab('inputs')" id="tab-inputs">
+        Inputs
+        <span class="badge" id="sourceCount">0</span>
+      </button>
+    </nav>
+
+    <!-- Dashboard View -->
+    <div id="view-dashboard" class="main-view active">
+
+      <!-- Progress Bar (hidden normally) -->
+      <div class="progress-wrap" id="progressWrap" style="display:none">
+        <div class="progress-bar" id="progressBar"></div>
+        <span class="progress-label" id="progressLabel">Fetching articles…</span>
+      </div>
+
+      <!-- Subject Sub-Tabs Bar -->
+      <div class="subtab-bar" id="subtabBar">
+        <div class="subtab-scroll" id="subtabScroll">
+          <!-- Populated by JS -->
+        </div>
+        <button class="btn-icon subtab-add" title="Add subject" onclick="app.addSubjectPrompt()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </div>
+
+      <!-- Article Grid -->
+      <div class="article-stage" id="articleStage">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-icon">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M19 11H5M19 11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2m14 0V9a2 2 0 0 0-2-2M5 11V9a2 2 0 0 0 2-2m0 0V5a2 2 0 0 0-2-2H3m6 4V5a2 2 0 0 0-2-2H5"/></svg>
+          </div>
+          <p class="empty-title">No articles yet</p>
+          <p class="empty-body">Add source links in the <strong>Inputs</strong> tab, then hit <strong>Refresh</strong> to fetch the latest energy news.</p>
+        </div>
+        <div class="article-grid" id="articleGrid" style="display:none"></div>
+      </div>
+    </div>
+
+    <!-- Inputs View -->
+    <div id="view-inputs" class="main-view">
+
+      <div class="inputs-layout">
+
+        <!-- Source Links Panel -->
+        <section class="inputs-panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Source Links</h2>
+            <button class="btn-add" onclick="app.showAddSourceModal()">+ Add Source</button>
+          </div>
+          <p class="panel-desc">URLs are scraped one level deep — all linked articles on the page are discovered and fetched.</p>
+          <ul class="source-list" id="sourceList">
+            <!-- Populated by JS -->
+          </ul>
+        </section>
+
+        <!-- Subjects Panel -->
+        <section class="inputs-panel">
+          <div class="panel-header">
+            <h2 class="panel-title">Subject Tabs</h2>
+            <button class="btn-add" onclick="app.addSubjectPrompt()">+ Add Subject</button>
+          </div>
+          <p class="panel-desc">Articles are automatically classified into these subjects. Drag to reorder.</p>
+          <ul class="subject-list" id="subjectList">
+            <!-- Populated by JS -->
+          </ul>
+        </section>
+
+      </div>
+
+      <div class="api-key-section">
+        <h3 class="panel-title" style="margin-bottom:8px">Anthropic API Key</h3>
+        <p class="panel-desc">Stored only in your browser. Used to fetch and classify articles via Claude.</p>
+        <div class="api-key-row">
+          <input type="password" id="apiKeyInput" placeholder="sk-ant-..." class="api-input" />
+          <button class="btn-save" onclick="app.saveApiKey()">Save Key</button>
+        </div>
+        <p class="api-status" id="apiStatus"></p>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- Add Source Modal -->
+  <div class="modal-overlay" id="addSourceModal" style="display:none" onclick="app.closeModal('addSourceModal')">
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3 class="modal-title">Add Source Link</h3>
+      <label class="modal-label">URL</label>
+      <input type="url" id="newSourceUrl" class="modal-input" placeholder="https://www.example.com/" />
+      <label class="modal-label">Label (optional)</label>
+      <input type="text" id="newSourceLabel" class="modal-input" placeholder="e.g. Utility Dive" />
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="app.closeModal('addSourceModal')">Cancel</button>
+        <button class="btn-primary" onclick="app.addSource()">Add Source</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Subject Modal -->
+  <div class="modal-overlay" id="addSubjectModal" style="display:none" onclick="app.closeModal('addSubjectModal')">
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3 class="modal-title">Add Subject Tab</h3>
+      <label class="modal-label">Subject Name</label>
+      <input type="text" id="newSubjectName" class="modal-input" placeholder="e.g. Grid Modernization" />
+      <label class="modal-label">Keywords (comma-separated, helps with classification)</label>
+      <input type="text" id="newSubjectKeywords" class="modal-input" placeholder="e.g. smart grid, transmission, SCADA" />
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="app.closeModal('addSubjectModal')">Cancel</button>
+        <button class="btn-primary" onclick="app.addSubject()">Add Subject</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Subject Modal -->
+  <div class="modal-overlay" id="editSubjectModal" style="display:none" onclick="app.closeModal('editSubjectModal')">
+    <div class="modal" onclick="event.stopPropagation()">
+      <h3 class="modal-title">Edit Subject</h3>
+      <input type="hidden" id="editSubjectId" />
+      <label class="modal-label">Subject Name</label>
+      <input type="text" id="editSubjectName" class="modal-input" />
+      <label class="modal-label">Keywords (comma-separated)</label>
+      <input type="text" id="editSubjectKeywords" class="modal-input" />
+      <div class="modal-actions">
+        <button class="btn-ghost" onclick="app.closeModal('editSubjectModal')">Cancel</button>
+        <button class="btn-primary" onclick="app.saveEditSubject()">Save Changes</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
