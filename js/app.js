@@ -387,12 +387,19 @@ async function refresh() {
       return;
     }
 
-    showProgress(88, `Classifying ${newItems.length} articles…`);
+    // Fetch first paragraph of each article for better keyword matching
+    showProgress(80, `Reading article content (${newItems.length} articles)…`);
+    const withBody = await enrichWithBodyText(newItems, (done, total) => {
+      showProgress(80 + Math.round((done / total) * 10), `Reading article content… ${done}/${total}`);
+    });
 
-    const classified = newItems.map(item => ({
-      ...item,
-      subjects: classifyByKeywords(item)
-    }));
+    showProgress(92, `Classifying ${newItems.length} articles…`);
+
+    const classified = withBody.map(item => {
+      const result = { ...item, subjects: classifyByKeywords(item) };
+      delete result.bodyText; // transient — not persisted
+      return result;
+    });
 
     showProgress(96, 'Saving…');
 
@@ -567,10 +574,45 @@ function isLikelyArticleUrl(url, base) {
 }
 
 /* ──────────────────────────────────────────────────────
-   Keyword-based Classification
+   Article body enrichment — fetches the first substantial
+   paragraph of each article for better keyword matching
+   ────────────────────────────────────────────────────── */
+async function enrichWithBodyText(articles, onProgress) {
+  const CONCURRENCY = 5;
+  const results = articles.map(a => ({ ...a }));
+
+  for (let i = 0; i < articles.length; i += CONCURRENCY) {
+    const batch = results.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(async (article) => {
+      article.bodyText = await fetchFirstParagraph(article.url);
+    }));
+    onProgress(Math.min(i + CONCURRENCY, articles.length), articles.length);
+  }
+
+  return results;
+}
+
+async function fetchFirstParagraph(url) {
+  try {
+    const res = await fetch(CORS_PROXY + encodeURIComponent(url), { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return '';
+    const html = await res.text();
+    const doc  = new DOMParser().parseFromString(html, 'text/html');
+    doc.querySelectorAll('nav, header, footer, aside, svg, script, style, noscript').forEach(el => el.remove());
+    for (const p of doc.querySelectorAll('p, [class*="body"] p, [class*="content"] p, [class*="article"] p')) {
+      const t = p.textContent.trim();
+      if (t.length > 80) return t.slice(0, 600);
+    }
+    return '';
+  } catch { return ''; }
+}
+
+/* ──────────────────────────────────────────────────────
+   Keyword-based Classification — uses title, RSS summary,
+   and fetched first paragraph; word-boundary aware
    ────────────────────────────────────────────────────── */
 function classifyByKeywords(article) {
-  const text = (article.title + ' ' + article.summary).toLowerCase();
+  const text = [article.title, article.summary, article.bodyText || ''].join(' ').toLowerCase();
   return state.subjects
     .filter(s => {
       if (!s.keywords) return false;
@@ -578,9 +620,19 @@ function classifyByKeywords(article) {
         .split(',')
         .map(k => k.trim().toLowerCase())
         .filter(Boolean)
-        .some(kw => text.includes(kw));
+        .some(kw => {
+          try {
+            return new RegExp(`\\b${escapeRegex(kw)}\\b`).test(text);
+          } catch {
+            return text.includes(kw);
+          }
+        });
     })
     .map(s => s.id);
+}
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /* ══════════════════════════════════════════════════════
