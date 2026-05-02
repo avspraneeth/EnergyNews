@@ -235,12 +235,22 @@ function addSource() {
 }
 
 function deleteSource(id) {
-  if (!confirm('Remove this source?')) return;
-  state.sources = state.sources.filter(s => s.id !== id);
+  const src = state.sources.find(s => s.id === id);
+  if (!confirm(`Remove "${src?.label || 'this source'}"? Its articles will be removed from the dashboard.`)) return;
+  state.sources  = state.sources.filter(s => s.id !== id);
+  state.articles = state.articles.filter(a => a.sourceId !== id);
   saveState();
-  renderSourceList();
-  document.getElementById('sourceCount').textContent = state.sources.length;
+  renderAll();
   toast('Source removed');
+}
+
+function clearArticles() {
+  if (!confirm('Clear all articles from the dashboard? Sources and subjects are kept.')) return;
+  state.articles    = [];
+  state.lastRefresh = null;
+  saveState();
+  renderAll();
+  toast('Dashboard cleared');
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -420,14 +430,14 @@ async function fetchAndParseRSS(source) {
   const text = await res.text();
 
   // Try RSS/Atom first
-  const rssItems = tryParseRSS(text, label);
+  const rssItems = tryParseRSS(text, label, source.id);
   if (rssItems.length > 0) return rssItems;
 
   // Fall back to HTML scraping
-  return scrapeHTML(text, label, source.url);
+  return scrapeHTML(text, label, source.url, source.id);
 }
 
-function tryParseRSS(text, sourceLabel) {
+function tryParseRSS(text, sourceLabel, sourceId) {
   try {
     const parser = new DOMParser();
     const doc    = parser.parseFromString(text, 'text/xml');
@@ -456,6 +466,7 @@ function tryParseRSS(text, sourceLabel) {
         date:     parseRSSDate(dateRaw),
         summary:  stripHtml(descRaw).slice(0, 220).trim(),
         source:   sourceLabel,
+        sourceId: sourceId,
         type:     detectArticleType(title),
         subjects: []
       };
@@ -467,50 +478,67 @@ function tryParseRSS(text, sourceLabel) {
    HTML scraper — extracts article links from pages that
    don't publish an RSS/Atom feed
    ────────────────────────────────────────────────────── */
-function scrapeHTML(htmlText, sourceLabel, baseUrl) {
+function scrapeHTML(htmlText, sourceLabel, baseUrl, sourceId) {
   const parser = new DOMParser();
   const doc    = parser.parseFromString(htmlText, 'text/html');
 
   // Remove navigation chrome to reduce noise
-  doc.querySelectorAll('nav, header, footer, aside, .sidebar, .menu, .navigation, .breadcrumb').forEach(el => el.remove());
+  doc.querySelectorAll('nav, header, footer, aside, .sidebar, .menu, .navigation, .breadcrumb, .widget').forEach(el => el.remove());
 
   const seen     = new Set();
   const articles = [];
 
   function addArticle(url, title, container) {
-    if (!url || !title || title.length < 10 || seen.has(url)) return;
+    const t = (title || '').trim();
+    if (!url || t.length < 10 || seen.has(url)) return;
     if (!isLikelyArticleUrl(url, baseUrl)) return;
     seen.add(url);
-    const dateEl  = container?.querySelector('time, [datetime], .date, .pub-date, .published, .entry-date');
+    const dateEl  = container?.querySelector('time, [datetime], .date, .pub-date, .published, .entry-date, .post-date, .updated');
     const dateStr = dateEl?.getAttribute('datetime') || dateEl?.textContent;
-    const paraEl  = container?.querySelector('p');
+    const paraEl  = container?.querySelector('p, .excerpt, .entry-summary, .post-excerpt, .summary');
     const summary = paraEl ? stripHtml(paraEl.textContent).slice(0, 220).trim() : '';
-    articles.push({ id: uid(), url, title: title.trim(), date: parseRSSDate(dateStr), summary, source: sourceLabel, type: detectArticleType(title), subjects: [] });
+    articles.push({ id: uid(), url, title: t, date: parseRSSDate(dateStr), summary, source: sourceLabel, sourceId, type: detectArticleType(t), subjects: [] });
   }
 
-  // Strategy 1: explicit <article> elements
+  // Strategy 1: <article> elements — works for most well-structured sites
   doc.querySelectorAll('article').forEach(el => {
-    const link    = el.querySelector('h1 a, h2 a, h3 a, h4 a, a[href]');
-    const heading = el.querySelector('h1, h2, h3, h4');
-    if (link && heading) {
-      addArticle(resolveUrl(link.getAttribute('href'), baseUrl), heading.textContent, el);
+    // Find the primary title link using many common class patterns
+    const link = el.querySelector(
+      'h1 a[href], h2 a[href], h3 a[href], h4 a[href],' +
+      '.entry-title a[href], .post-title a[href], .card-title a[href],' +
+      '.article-title a[href], [class*="title"] a[href], a[rel="bookmark"]'
+    );
+    const heading = el.querySelector('h1, h2, h3, h4, .entry-title, .post-title, .card-title, [class*="title"]');
+    if (link) {
+      addArticle(resolveUrl(link.getAttribute('href'), baseUrl), heading?.textContent || link.textContent, el);
     }
   });
 
-  // Strategy 2: headings that contain or are followed by a link
+  // Strategy 2: title-class and heading links outside <article> wrappers
+  // Covers WordPress themes, Elementor/Divi builders, and custom card layouts
   if (articles.length < 5) {
-    doc.querySelectorAll('h2 a[href], h3 a[href]').forEach(link => {
-      const container = link.closest('li, div, section, article') || link.parentElement?.parentElement;
+    const sel = [
+      'h2 a[href]', 'h3 a[href]',
+      '.entry-title a[href]', '.post-title a[href]',
+      '.card-title a[href]', '.article-title a[href]',
+      'a[rel="bookmark"][href]',
+      '[class*="title"] a[href]', '[class*="heading"] a[href]',
+      '[class*="card"] h2 a[href]', '[class*="card"] h3 a[href]',
+      '[class*="post"] h2 a[href]',  '[class*="resource"] h2 a[href]',
+      '[class*="item"] h2 a[href]',  '[class*="item"] h3 a[href]'
+    ].join(', ');
+    doc.querySelectorAll(sel).forEach(link => {
+      const container = link.closest('li, article, [class*="card"], [class*="item"], [class*="post"], div') || link.parentElement?.parentElement;
       addArticle(resolveUrl(link.getAttribute('href'), baseUrl), link.textContent, container);
     });
   }
 
-  // Strategy 3: any same-domain links with descriptive text as a last resort
+  // Strategy 3: same-domain links with descriptive text — broad last resort
   if (articles.length < 3) {
     doc.querySelectorAll('a[href]').forEach(link => {
-      const title = link.getAttribute('title') || link.textContent;
-      if (title && title.trim().length > 25) {
-        addArticle(resolveUrl(link.getAttribute('href'), baseUrl), title, link.closest('li, div'));
+      const title = (link.getAttribute('title') || link.textContent || '').trim();
+      if (title.length > 15) {
+        addArticle(resolveUrl(link.getAttribute('href'), baseUrl), title, link.closest('li, [class*="card"], [class*="item"], div'));
       }
     });
   }
@@ -667,6 +695,7 @@ document.getElementById('newSubjectName').addEventListener('keydown', e => {
    ══════════════════════════════════════════════════════ */
 window.app = {
   refresh,
+  clearArticles,
   switchMainTab,
   setActiveSubject,
   showAddSourceModal,
