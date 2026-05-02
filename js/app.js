@@ -482,14 +482,15 @@ function scrapeHTML(htmlText, sourceLabel, baseUrl, sourceId) {
   const parser = new DOMParser();
   const doc    = parser.parseFromString(htmlText, 'text/html');
 
-  // Remove navigation chrome to reduce noise
-  doc.querySelectorAll('nav, header, footer, aside, .sidebar, .menu, .navigation, .breadcrumb, .widget').forEach(el => el.remove());
+  // Strip elements that produce noise in textContent reads
+  doc.querySelectorAll('nav, header, footer, aside, .sidebar, .menu, .navigation, .breadcrumb, .widget, svg, script, style, noscript, template').forEach(el => el.remove());
 
   const seen     = new Set();
   const articles = [];
 
   function addArticle(url, title, container) {
-    const t = (title || '').trim();
+    // Strip leading type-label words that scrapers often pick up alongside titles
+    const t = (title || '').trim().replace(/^(article|blog|news|report|study|insight|resource|post|event|webinar|podcast)\s+/i, '').trim();
     if (!url || t.length < 10 || seen.has(url)) return;
     if (!isLikelyArticleUrl(url, baseUrl)) return;
     seen.add(url);
