@@ -64,7 +64,7 @@
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M19 11H5M19 11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2m14 0V9a2 2 0 0 0-2-2M5 11V9a2 2 0 0 0 2-2m0 0V5a2 2 0 0 0-2-2H3m6 4V5a2 2 0 0 0-2-2H5"/></svg>
           </div>
           <p class="empty-title">No articles yet</p>
-          <p class="empty-body">Add source links in the <strong>Inputs</strong> tab, then hit <strong>Refresh</strong> to fetch the latest energy news.</p>
+          <p class="empty-body">Add RSS feed URLs in the <strong>Inputs</strong> tab, then hit <strong>Refresh</strong> to fetch the latest energy news.</p>
         </div>
         <div class="article-grid" id="articleGrid" style="display:none"></div>
       </div>
@@ -81,7 +81,7 @@
             <h2 class="panel-title">Source Links</h2>
             <button class="btn-add" onclick="app.showAddSourceModal()">+ Add Source</button>
           </div>
-          <p class="panel-desc">URLs are scraped one level deep — all linked articles on the page are discovered and fetched.</p>
+          <p class="panel-desc">Add RSS or Atom feed URLs — articles are fetched and classified automatically, no API key needed.</p>
           <ul class="source-list" id="sourceList">
             <!-- Populated by JS -->
           </ul>
@@ -101,15 +101,6 @@
 
       </div>
 
-      <div class="api-key-section">
-        <h3 class="panel-title" style="margin-bottom:8px">Anthropic API Key</h3>
-        <p class="panel-desc">Stored only in your browser. Used to fetch and classify articles via Claude.</p>
-        <div class="api-key-row">
-          <input type="password" id="apiKeyInput" placeholder="sk-ant-..." class="api-input" />
-          <button class="btn-save" onclick="app.saveApiKey()">Save Key</button>
-        </div>
-        <p class="api-status" id="apiStatus"></p>
-      </div>
 
     </div>
 
